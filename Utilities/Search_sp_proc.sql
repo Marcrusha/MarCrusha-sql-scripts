@@ -1,11 +1,10 @@
 /*
 Search proc
-Author: Kay Benzel
+Authors: Kirsten Benzel, Marcus Hartman
 
 Creates a proc which allows quick searching for a string across a database. Useful for hunting down columns in procs and for finding dependencies.
 */
-
-DROP PROCEDURE [dbo].[Search_sp]
+DROP PROCEDURE [util].[Search_sp]
 GO
 
 SET ANSI_NULLS ON
@@ -14,10 +13,11 @@ GO
 SET QUOTED_IDENTIFIER ON
 GO
 
-CREATE PROCEDURE [dbo].[Search_sp](
+CREATE PROCEDURE [util].[Search_sp](
    @search_string NVARCHAR(4000),     
    @database_list NVARCHAR(MAX) = NULL,
    @case_sensitive BIT = 0,
+   @exact_string BIT = 1,
    @include_jobs BIT = 1,
    @include_columns BIT = 0,
    @include_parameters BIT = 0,
@@ -29,13 +29,14 @@ SET NOCOUNT ON;
 SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
 
 /*
-USE [database1]
-GO
-EXEC [dbo].[Search_sp]
+How to Use:
+
+EXEC [util].[Search_sp]
     @search_string = 'string',
     @database_list = 'database1,database2',
     @case_sensitive = 0,
-    @include_jobs = 1,
+    @exact_string = 1, 		-- 0 = treat "_" and "*" as wildcards. 1 = DO NOT treat "_" and "*" as wildcards.
+    @include_jobs = 1,		
     @include_columns = 1,
     @include_parameters = 1,
     @include_system_objects = 0,
@@ -78,10 +79,17 @@ GO
        [param]         NVARCHAR(128),
        [column]        NVARCHAR(128));
 
+	SET @database_list = REPLACE(@database_list, CHAR(32), '')
+
+	IF @exact_string = 1
+		BEGIN;
+			SET @search_string =  REPLACE(REPLACE(@search_string,CHAR(37),'['+CHAR(37)+']'),CHAR(95),'['+CHAR(95)+']')
+		END;
+
 	SELECT	@all_text = CASE @include_system_objects WHEN 1 THEN N'all_' ELSE N'' END,
 			@coll_text = CASE @case_sensitive WHEN 1 THEN N'COLLATE Latin1_General_BIN' ELSE N'' END;
 
-   SET @init_sql = N'SELECT [database] = ''$db$'',
+	SET @init_sql = N'SELECT [database] = ''$db$'',
 							[schema] = QUOTENAME(s.name),
 							[object]   = QUOTENAME(o.name),
 							[type]     = o.type_desc,
@@ -104,10 +112,13 @@ GO
 			FOR 
 				SELECT QUOTENAME(d.name)
 				FROM sys.databases AS d
-					LEFT OUTER JOIN ops.SplitStringsXML_fn(@database_list, N',') AS s
+					LEFT OUTER JOIN dba.SplitStringsXML_fn(@database_list, N',') AS s
 						ON 1 = 1
-				WHERE (LOWER(d.name) = LOWER(s.Item) OR NULLIF(RTRIM(@database_list), N'') IS NULL)
-					AND d.database_id BETWEEN CASE @include_system_databases WHEN 1 THEN 1 ELSE 5 END AND 32766 ORDER BY d.name;
+				WHERE (LOWER(d.name) = LOWER(s.Item)
+						OR NULLIF(RTRIM(LTRIM(@database_list)), N'') IS NULL)
+					AND d.database_id BETWEEN CASE @include_system_databases WHEN 1 THEN 1 ELSE 5 END AND 32766
+					AND D.State = 0
+				ORDER BY d.name;
 	OPEN c;
    
 		FETCH NEXT FROM c INTO @dbname;
@@ -117,6 +128,26 @@ GO
 
 					INSERT INTO #t 
 					EXEC sp_executesql @run_sql, N'@search_string NVARCHAR(4000)', @search_string;
+
+							SET @run_sql = N'SELECT [database] = ''$db$'',
+													[schema]   = QUOTENAME(s.name),
+													[object]   = QUOTENAME(o.name),
+													[type]     = o.type_desc,
+													o.create_date,
+													o.modify_date,
+													c.name
+											FROM $db$.sys.tables AS c
+												INNER JOIN $db$.sys.$all$objects AS o
+													ON c.[object_id] = o.[object_id]
+												INNER JOIN $db$.sys.schemas AS s
+													ON o.[schema_id] = s.[schema_id]
+												WHERE c.name $coll$ 
+													  LIKE N''%'' + @search_string + ''%'' $coll$;';
+
+							SET @run_sql = REPLACE(REPLACE(REPLACE(@run_sql,'$all$',@all_text),'$coll$',@coll_text),'$db$',@dbname);
+
+								INSERT INTO #t ([database],[schema],[object],[type],[create_date],[modify_date],[definition])
+								EXEC sp_executesql @run_sql, N'@search_string NVARCHAR(4000)', @search_string;
 
 					IF @include_columns = 1
 						BEGIN;
@@ -186,11 +217,11 @@ GO
 			create_date,
 			modify_date
    FROM (
-			SELECT	*, 
-					[count] = (DATALENGTH([definition]) - DATALENGTH(REPLACE([definition], @search_string, '')))/DATALENGTH(@search_string),
-					abbrev_def = SUBSTRING([definition], 1, 
-					CHARINDEX(@search_string, [definition]))
-			FROM #t) AS x
+		SELECT	*, 
+				[count] = (DATALENGTH([definition]) - DATALENGTH(REPLACE([definition], @search_string, '')))/DATALENGTH(@search_string),
+				abbrev_def = SUBSTRING([definition], 1, 
+				CHARINDEX(@search_string, [definition]))
+		FROM #t) AS x
    ORDER BY [database], [schema], [object];
 
 	IF @include_jobs = 1
@@ -227,7 +258,7 @@ GO
 	IF @include_columns = 1 OR @include_parameters = 1
 		BEGIN;
 
-			SELECT 'Columns/parameters';
+			SELECT 'Columns/Parameters';
 
 			SELECT [database],
 				   [schema],
@@ -235,8 +266,8 @@ GO
 				   [type],
 				   [param],
 				   [column],
-				   create_date,
-				   modify_date
+				   [create_date],
+				   [modify_date]
 			FROM #cp
 			ORDER BY [database], [schema], [object], [param], [column];
 			
@@ -250,5 +281,3 @@ SET NOCOUNT OFF;
 RETURN 0;
 
 GO
-
-
