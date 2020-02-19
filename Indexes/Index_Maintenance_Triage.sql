@@ -34,7 +34,7 @@ WITH
 						+ CASE	WHEN I.is_unique <> 0			THEN ', unique' ELSE '' END
 						+ CASE	WHEN I.is_primary_key <> 0		THEN ', primary key' ELSE '' END
 						+ CASE	WHEN I.has_filter = 1			THEN ', filtered' ELSE '' END
-						+ CASE	WHEN I.[type] = 6				THEN ', columnstore' ELSE '' END
+						+ CASE	WHEN I.[type] IN (5,6)			THEN ', columnstore' ELSE '' END
 						+ CASE	WHEN FI.[object_id] IS NOT NULL	THEN ', fulltext' ELSE '' END),
 			[table_name] = O.[Name],
 			[schema] = SC.[Name],
@@ -49,7 +49,7 @@ WITH
 				AND I.index_id = FI.unique_index_id
 		WHERE O.[type] IN ('U','V')
 			AND O.is_ms_shipped = 0
-			AND I.[type] NOT IN (0,6)
+			AND I.[type] NOT IN (0,5,6)
 		),
 		
 	sys_index_operational_stats AS (
@@ -96,7 +96,7 @@ WITH
 		WHERE U.database_id = DB_ID()
 			AND O.[type] IN ('U','V')
 			AND O.is_ms_shipped = 0
-			AND I.[type] NOT IN (0,6)
+			AND I.[type] NOT IN (0,5,6)
 		),
 		
 	sys_index_physical_stats AS (
@@ -128,7 +128,7 @@ WITH
 				ON O.[object_id] = I.[object_id]
 		WHERE O.[type] IN ('U','V')
 			AND O.is_ms_shipped = 0
-			AND I.[type] NOT IN (0,6)
+			AND I.[type] NOT IN (0,5,6)
 		GROUP BY I.[object_id], I.index_id
 		)
 		
@@ -201,7 +201,7 @@ WITH
 			ON IX.data_space_id = PT.data_space_id
 	WHERE O.is_ms_shipped = 0
 		AND O.[type] IN ('U','V')
-		AND IX.[type] NOT IN (0,6)
+		AND IX.[type] NOT IN (0,5,6)
 		AND IX.[name] IS NOT NULL
 		--AND STATS_DATE(IX.[object_id], IX.index_id) < GETDATE() -7
 		AND (FR.[page_density] < 60 OR FR.page_fragmentation > 40)
